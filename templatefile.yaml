@@ -1,0 +1,225 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: 'SAM Template describing how to make a lambda function that sends traffic
+  through a static IP
+
+  '
+Parameters:
+  VpcCidrBlock:
+    Type: String
+  PublicSubnetCidrBlock:
+    Type: String
+  PrivateSubnetCidrBlock:
+    Type: String
+Resources:
+  StaticIpVpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock:
+        Ref: VpcCidrBlock
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      InstanceTenancy: default
+    Metadata:
+      SamResourceId: StaticIpVpc
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: StaticIpVpc
+      CidrBlock:
+        Ref: PublicSubnetCidrBlock
+      MapPublicIpOnLaunch: false
+      AvailabilityZone:
+        Fn::Select:
+        - 0
+        - Fn::GetAZs:
+            Ref: AWS::Region
+    Metadata:
+      SamResourceId: PublicSubnet
+  PrivateSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: StaticIpVpc
+      CidrBlock:
+        Ref: PrivateSubnetCidrBlock
+      MapPublicIpOnLaunch: false
+      AvailabilityZone:
+        Fn::Select:
+        - 0
+        - Fn::GetAZs:
+            Ref: AWS::Region
+    Metadata:
+      SamResourceId: PrivateSubnet
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Metadata:
+      SamResourceId: InternetGateway
+  VpcAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId:
+        Ref: InternetGateway
+      VpcId:
+        Ref: StaticIpVpc
+    Metadata:
+      SamResourceId: VpcAttachment
+  VpcPublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId:
+        Ref: StaticIpVpc
+    Metadata:
+      SamResourceId: VpcPublicRouteTable
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: VpcAttachment
+    Properties:
+      DestinationCidrBlock: '0.0.0.0/0'
+      RouteTableId:
+        Ref: VpcPublicRouteTable
+      GatewayId:
+        Ref: InternetGateway
+    Metadata:
+      SamResourceId: PublicRoute
+  SubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId:
+        Ref: VpcPublicRouteTable
+      SubnetId:
+        Ref: PublicSubnet
+    Metadata:
+      SamResourceId: SubnetRouteTableAssociation
+  ElasticIp:
+    Type: AWS::EC2::EIP
+    Metadata:
+      SamResourceId: ElasticIp
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId:
+        Fn::GetAtt:
+        - ElasticIp
+        - AllocationId
+      SubnetId:
+        Ref: PublicSubnet
+    Metadata:
+      SamResourceId: NatGateway
+  VpcPrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId:
+        Ref: StaticIpVpc
+    Metadata:
+      SamResourceId: VpcPrivateRouteTable
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    DependsOn: VpcAttachment
+    Properties:
+      DestinationCidrBlock: '0.0.0.0/0'
+      RouteTableId:
+        Ref: VpcPrivateRouteTable
+      NatGatewayId:
+        Ref: NatGateway
+    Metadata:
+      SamResourceId: PrivateRoute
+  PrivateSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId:
+        Ref: VpcPrivateRouteTable
+      SubnetId:
+        Ref: PrivateSubnet
+    Metadata:
+      SamResourceId: PrivateSubnetRouteTableAssociation
+  API:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: v1
+      EndpointConfiguration:
+        Type: REGIONAL
+      DefinitionBody:
+        Fn::Transform:
+          Name: AWS::Include
+          Parameters:
+            Location: s3://codts/5abb0dca03ed9cc2ccac2a1386712899
+    Metadata:
+      SamResourceId: API
+  StaticIpLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: s3://codts/cf9ebd3b3beaa75aff2a6ce9d6e77f75
+      Handler: static-ip-lambda.lambdaHandler
+      Runtime: nodejs18.x
+      Timeout: 10
+      Role:
+        Fn::GetAtt:
+        - StaticIpLambdaRole
+        - Arn
+      VpcConfig:
+        SecurityGroupIds:
+        - Fn::GetAtt:
+          - StaticIpVpc
+          - DefaultSecurityGroup
+        SubnetIds:
+        - Ref: PrivateSubnet
+      Events:
+        VerifyStaticIpEvent:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: API
+            Path: /ip
+            Method: GET
+      Environment:
+        Variables:
+          STATIC_IP:
+            Ref: ElasticIp
+      Layers:
+      - Ref: Nodemodules
+    Metadata:
+      SamResourceId: StaticIpLambda
+  StaticIpLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      ManagedPolicyArns:
+      - Fn::Sub: arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      - Fn::Sub: arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+    Metadata:
+      SamResourceId: StaticIpLambdaRole
+  Nodemodules:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: static-ip-lib
+      Description: Dependencies for the static-ip-lib.
+      ContentUri: s3://codts/ce9837aac57ee3b58dcb5bb92aff98e3
+      CompatibleRuntimes:
+      - nodejs18.x
+    Metadata:
+      SamResourceId: Nodemodules
+Outputs:
+  StaticIpAddress:
+    Description: Address of the generated static ip
+    Value:
+      Ref: ElasticIp
+  TestEndpoint:
+    Description: Url of test endpoint to verify Static IP address
+    Value:
+      Fn::Join:
+      - ''
+      - - https://
+        - Ref: API
+        - .execute-api.
+        - Ref: AWS::Region
+        - .amazonaws.com/v1/ip

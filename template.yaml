@@ -113,8 +113,8 @@ Resources:
     Properties:
       CodeUri: lambdas/static-ip-lambda
       Handler: static-ip-lambda.lambdaHandler
-      Runtime: nodejs12.x
-      Timeout: 10      
+      Runtime: nodejs18.x
+      Timeout: 10     
       Role: !GetAtt StaticIpLambdaRole.Arn
       VpcConfig:
         SecurityGroupIds:
@@ -131,6 +131,8 @@ Resources:
       Environment:
         Variables:
           STATIC_IP: !Ref ElasticIp
+      # Layers:
+      #   - !Ref Nodemodules
 
   StaticIpLambdaRole:
     Type: AWS::IAM::Role
@@ -148,11 +150,19 @@ Resources:
         - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
         - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
 
+  # Nodemodules:
+  #   Type: AWS::Serverless::LayerVersion
+  #   Properties:
+  #     LayerName: static-ip-lib
+  #     Description: Dependencies for the static-ip-lib.
+  #     ContentUri: node_modules/.
+  #     CompatibleRuntimes:
+  #       - nodejs18.x
 
 Outputs:
   StaticIpAddress:
     Description: Address of the generated static ip
     Value: !Ref ElasticIp
   TestEndpoint: 
-    Description: Url of test endpoint to verify Static IP
+    Description: Url of test endpoint to verify Static IP address
     Value: !Join ['', ['https://', !Ref API, '.execute-api.', !Ref AWS::Region, '.amazonaws.com/v1/ip']]
